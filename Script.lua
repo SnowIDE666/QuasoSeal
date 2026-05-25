@@ -8,7 +8,7 @@ local VIM = game:GetService("VirtualInputManager")
 local flyActive, staminaActive, espActive = false, false, false
 local autoFishActive, speedActive = false, false
 local esperandoReset = false
-local forzarResetSpot = false  -- se activa cuando se hace tp a spot suertudo
+local forzarResetSpot = false
 local flySpeed = 50
 local bodyVel, bodyGyro
 local staminaConexiones, espConexiones, highlights = {}, {}, {}
@@ -193,9 +193,9 @@ local function venderPeces()
     end
     if not mejorPP then return false end
     hrp.CFrame = CFrame.new(mejorPart.Position + Vector3.new(0, 3, 3))
-    task.wait(0.5)  -- FIX: subido de 0.3 a 0.5 para que el servidor procese la posición
+    task.wait(0.5)
     pcall(function() fireproximityprompt(mejorPP) end)
-    task.wait(1.5)  -- FIX: subido de 1.0 a 1.5 para dar tiempo a que complete la venta
+    task.wait(1.5)
     hrp.CFrame = posOriginal
     return true
 end
@@ -224,12 +224,12 @@ local function handleClickPrompt(cp, fishingGui)
         if txt:find("Press & Hold") or txt:find("Hold") then
             local vs = workspace.CurrentCamera.ViewportSize
             local x, y = vs.X / 2, vs.Y / 2
-            pcall(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
             while autoFishActive and fishingGui.Enabled do
                 if not (cp.Text:find("Press & Hold") or cp.Text:find("Hold")) then
                     pcall(function() VIM:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
                     break
                 end
+                pcall(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
                 task.wait(0.05)
             end
         else
@@ -249,8 +249,6 @@ local fishSwBtn, fishSwDot
 local function autoFishLoop()
     local pgui = player.PlayerGui
     while autoFishActive do
-
-        -- Verificar si mochila llena y vender
         local numFish, fishSlots = getNumFish()
         if numFish >= fishSlots then
             vimRelease()
@@ -269,38 +267,48 @@ local function autoFishLoop()
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
         while autoFishActive do
-            -- salir si se hizo tp a otro spot
             if forzarResetSpot then
                 vimRelease()
                 forzarResetSpot = false
                 break
             end
-            -- FIX: vimRelease() antes del break para soltar el click virtual
             local n, max = getNumFish()
             if n >= max then
                 vimRelease()
                 break
             end
 
+            -- Esperar ShakeBobberUI (caña en el agua)
             local fishingGui = pgui:FindFirstChild("FishingGameUI")
-            local clickThread = task.spawn(function()
+            if not (fishingGui and fishingGui.Enabled) then
                 local t0 = tick()
-                while autoFishActive and tick() - t0 < 10 do
+                while autoFishActive and tick() - t0 < 8 do
                     if forzarResetSpot then break end
-                    local fg = pgui:FindFirstChild("FishingGameUI")
-                    if fg and fg.Enabled then break end
-                    if not esperandoReset then refClick() end
-                    task.wait(0.05)
+                    local shakeUI = pgui:FindFirstChild("ShakeBobberUI")
+                    if shakeUI and shakeUI.Enabled then break end
+                    task.wait(0.03)
                 end
-            end)
-            local t0 = tick()
-            while autoFishActive and tick() - t0 < 10 do
-                if forzarResetSpot then break end
-                fishingGui = pgui:FindFirstChild("FishingGameUI")
-                if fishingGui and fishingGui.Enabled then break end
-                task.wait(0.03)
+                -- ShakeBobberUI activo: sacudir con clicks hasta FishingGameUI
+                local clickThread = task.spawn(function()
+                    local t1 = tick()
+                    while autoFishActive and tick() - t1 < 10 do
+                        if forzarResetSpot then break end
+                        local fg = pgui:FindFirstChild("FishingGameUI")
+                        if fg and fg.Enabled then break end
+                        if not esperandoReset then refClick() end
+                        task.wait(0.05)
+                    end
+                end)
+                local t1 = tick()
+                while autoFishActive and tick() - t1 < 10 do
+                    if forzarResetSpot then break end
+                    fishingGui = pgui:FindFirstChild("FishingGameUI")
+                    if fishingGui and fishingGui.Enabled then break end
+                    task.wait(0.03)
+                end
+                task.cancel(clickThread)
             end
-            task.cancel(clickThread)
+
             if not autoFishActive then break end
             if forzarResetSpot then vimRelease() forzarResetSpot = false break end
             if not fishingGui or not fishingGui.Enabled then break end
@@ -318,15 +326,16 @@ local function autoFishLoop()
             task.spawn(function() handleClickPrompt(cp, fishingGui) end)
             while autoFishActive and fishingGui.Enabled do task.wait(0.03) end
 
+            -- Post-pesca: esperar FishGetUI y dar clicks hasta que se cierre
             esperandoReset = true
             local fishGetUI = pgui:FindFirstChild("FishGetUI")
             if fishGetUI then
                 local t1 = tick()
-                repeat task.wait(0.05) until fishGetUI.Enabled or tick() - t1 > 5
+                repeat task.wait(0.03) until fishGetUI.Enabled or tick() - t1 > 5
                 if fishGetUI.Enabled then
-                    local t2 = tick()
-                    while fishGetUI.Enabled and autoFishActive and tick() - t2 < 6 do
-                        refClick() task.wait(0.05)
+                    while fishGetUI.Enabled and autoFishActive do
+                        refClick()
+                        task.wait(0.05)
                     end
                 end
             else
@@ -335,32 +344,26 @@ local function autoFishLoop()
             end
             esperandoReset = false
 
-            -- FIX: si la mochila se llenó con este pez, salir ya sin esperar el loop de 6 seg
             local nCheck, maxCheck = getNumFish()
             if nCheck >= maxCheck then
                 vimRelease()
                 break
             end
 
+            -- Re-lanzar: reintentar proximity + E hasta que ShakeBobberUI o FishingGameUI aparezca
             local tL = tick()
             while autoFishActive and tick() - tL < 6 do
-                -- salir si se hizo tp a otro spot
                 if forzarResetSpot then vimRelease() forzarResetSpot = false break end
-                -- FIX: chequear mochila dentro del loop de espera también
                 local nL, maxL = getNumFish()
                 if nL >= maxL then vimRelease() break end
                 pcall(function() fireproximityprompt(pp) end)
                 pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
                 pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-                task.spawn(function()
-                    for _ = 1, 5 do
-                        if not esperandoReset then refClick() end
-                        task.wait(0.05)
-                    end
-                end)
+                task.wait(0.05)
+                local shakeUI = pgui:FindFirstChild("ShakeBobberUI")
                 local fg = pgui:FindFirstChild("FishingGameUI")
-                if fg and fg.Enabled then break end
-                task.wait(0.08)
+                if (shakeUI and shakeUI.Enabled) or (fg and fg.Enabled) then break end
+                task.wait(0.05)
             end
         end
     end
@@ -438,7 +441,7 @@ local function abrirTerminal()
     local maxBtn  = crearDotT(Color3.fromRGB(98, 197, 84),  50)
 
     local scroll = Instance.new("ScrollingFrame", tFrame)
-    scroll.Size = UDim2.new(1, -16, 1, -90)
+    scroll.Size = UDim2.new(1, -16, 1, -100)
     scroll.Position = UDim2.new(0, 8, 0, 44)
     scroll.BackgroundTransparency = 1
     scroll.BorderSizePixel = 0
@@ -464,31 +467,44 @@ local function abrirTerminal()
         l.TextXAlignment = Enum.TextXAlignment.Left
         l.TextWrapped = true
         task.defer(function()
-            scroll.CanvasSize = UDim2.new(0, 0, 0, layout.AbsoluteContentSize.Y + 4)
-            scroll.CanvasPosition = Vector2.new(0, scroll.CanvasSize.Y.Offset)
+            task.defer(function()
+                local h = layout.AbsoluteContentSize.Y + 4
+                scroll.CanvasSize = UDim2.new(0, 0, 0, h)
+                scroll.CanvasPosition = Vector2.new(0, h)
+            end)
         end)
     end
 
+    -- Input box: una sola línea, visualmente igual al original
     local inputBg = Instance.new("Frame", tFrame)
-    inputBg.Size = UDim2.new(1, -16, 0, 32)
-    inputBg.Position = UDim2.new(0, 8, 1, -42)
+    inputBg.Size = UDim2.new(1, -16, 0, 0)
+    inputBg.AutomaticSize = Enum.AutomaticSize.Y
+    inputBg.Position = UDim2.new(0, 8, 1, -8)
+    inputBg.AnchorPoint = Vector2.new(0, 1)
     inputBg.BackgroundColor3 = Color3.fromRGB(22, 22, 27)
     inputBg.BorderSizePixel = 0
     Instance.new("UICorner", inputBg).CornerRadius = UDim.new(0, 8)
+    local inputPad = Instance.new("UIPadding", inputBg)
+    inputPad.PaddingTop    = UDim.new(0, 8)
+    inputPad.PaddingBottom = UDim.new(0, 8)
+    inputPad.PaddingLeft   = UDim.new(0, 8)
+    inputPad.PaddingRight  = UDim.new(0, 8)
 
     local iPrompt = Instance.new("TextLabel", inputBg)
-    iPrompt.Size = UDim2.new(0, 18, 1, 0)
-    iPrompt.Position = UDim2.new(0, 8, 0, 0)
+    iPrompt.Size = UDim2.new(0, 14, 0, 18)
+    iPrompt.Position = UDim2.new(0, 0, 0, 0)
     iPrompt.BackgroundTransparency = 1
     iPrompt.Text = ">"
     iPrompt.TextColor3 = COLOR_ACTIVA
     iPrompt.Font = Enum.Font.GothamBold
     iPrompt.TextSize = 14
+    iPrompt.TextYAlignment = Enum.TextYAlignment.Top
     registrarColor(iPrompt, "TextColor3")
 
     local inputBox = Instance.new("TextBox", inputBg)
-    inputBox.Size = UDim2.new(1, -32, 1, 0)
-    inputBox.Position = UDim2.new(0, 26, 0, 0)
+    inputBox.Size = UDim2.new(1, -20, 0, 0)
+    inputBox.AutomaticSize = Enum.AutomaticSize.Y
+    inputBox.Position = UDim2.new(0, 18, 0, 0)
     inputBox.BackgroundTransparency = 1
     inputBox.Text = ""
     inputBox.PlaceholderText = "escribe lua aqui..."
@@ -497,10 +513,12 @@ local function abrirTerminal()
     inputBox.Font = Enum.Font.Code
     inputBox.TextSize = 14
     inputBox.TextXAlignment = Enum.TextXAlignment.Left
+    inputBox.TextYAlignment = Enum.TextYAlignment.Top
     inputBox.ClearTextOnFocus = false
+    inputBox.MultiLine = true
+    inputBox.TextWrapped = true
 
-    inputBox.FocusLost:Connect(function(entered)
-        if not entered then return end
+    local function ejecutarCodigo()
         local code = inputBox.Text
         if code == "" then return end
         log(code, Color3.fromRGB(160, 160, 255))
@@ -518,6 +536,20 @@ local function abrirTerminal()
             end
         end)
         if not ok then log(tostring(err), Color3.fromRGB(255, 100, 100)) end
+    end
+
+    -- Enter ejecuta, Shift+Enter hace salto de línea
+    inputBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local txt = inputBox.Text
+        if txt:sub(-1) == "\n" then
+            if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift) then
+                -- Shift+Enter: dejar el salto de línea
+            else
+                -- Enter solo: quitar el \n y ejecutar
+                inputBox.Text = txt:sub(1, -2)
+                ejecutarCodigo()
+            end
+        end
     end)
 
     local tInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -932,7 +964,7 @@ local function crearSeccionLucky(parent)
     hLabel.Size = UDim2.new(1, -36, 1, 0)
     hLabel.Position = UDim2.new(0, 14, 0, 0)
     hLabel.BackgroundTransparency = 1
-    hLabel.Text = "⭐ SPOTS SUERTUDOS"
+    hLabel.Text = "⭐ LUGARES SUERTUDOS :D"
     hLabel.TextColor3 = COLOR_ACTIVA
     hLabel.Font = Enum.Font.GothamBold
     hLabel.TextSize = 13
@@ -1027,7 +1059,6 @@ local function crearSeccionLucky(parent)
                 local part = spotRef:IsA("BasePart") and spotRef or spotRef:FindFirstChildWhichIsA("BasePart")
                 if not part then return end
 
-                -- Materiales considerados tierra solida (excluye Plastic = agua/lava liquida)
                 local materialesSolidos = {
                     [Enum.Material.Glacier]     = true,
                     [Enum.Material.Snow]        = true,
@@ -1041,7 +1072,6 @@ local function crearSeccionLucky(parent)
                     [Enum.Material.SmoothPlastic] = true,
                 }
 
-                -- Buscar tierra mas cercana en espiral alrededor del spot
                 local bestPos = nil
                 local bestDist = math.huge
                 for dist = 15, 80, 5 do
@@ -1076,7 +1106,6 @@ local function crearSeccionLucky(parent)
             table.insert(luckyRows, row)
         end
 
-        -- Mensaje si no hay spots activos
         if count == 0 then
             local empty = Instance.new("TextLabel", listScroll)
             empty.Size = UDim2.new(1, 0, 0, ITEM_H)
@@ -1095,7 +1124,6 @@ local function crearSeccionLucky(parent)
         end
     end
 
-    -- Escuchar cambios de LuckySpawned en tiempo real
     local function engancharSpots()
         for _, c in pairs(luckyConexiones) do c:Disconnect() end
         luckyConexiones = {}
@@ -1141,7 +1169,7 @@ local function crearSeccionTeleport(parent)
     hLabel.Size = UDim2.new(1, -36, 1, 0)
     hLabel.Position = UDim2.new(0, 14, 0, 0)
     hLabel.BackgroundTransparency = 1
-    hLabel.Text = "TELEPORT A JUGADOR"
+    hLabel.Text = "TELEPORT A JUGADOR ;3"
     hLabel.TextColor3 = COLOR_ACTIVA
     hLabel.Font = Enum.Font.GothamBold
     hLabel.TextSize = 13
@@ -1336,4 +1364,47 @@ UIS.InputChanged:Connect(function(inp)
 end)
 UIS.InputEnded:Connect(function(inp)
     if inp.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+end)
+
+-- ============================================================
+-- ANTI-ADMIN
+-- ============================================================
+local MOD_IDS = {
+    [395002797]  = true, [5785934400] = true, [6161009207] = true,
+    [533788547]  = true, [103052989]  = true, [448367131]  = true,
+    [7304569464] = true, [22927328]   = true, [5348354]    = true,
+    [181128289]  = true,
+}
+local MOD_GROUP = 34533445
+local MOD_RANK  = 250
+
+local function esAdmin(p)
+    if MOD_IDS[p.UserId] then return true end
+    local ok, result = pcall(function()
+        return p:IsInGroup(MOD_GROUP) and p:GetRankInGroup(MOD_GROUP) >= MOD_RANK
+    end)
+    return ok and result
+end
+
+local function panicMode()
+    if autoFishActive then desactivarAutoFish() end
+    if flyActive then flyActive = false detenerFly() end
+    if staminaActive then staminaActive = false desconectarStamina() end
+    if espActive then espActive = false desactivarEsp() end
+    if terminalSg then terminalSg:Destroy() terminalSg = nil end
+    pcall(function() sg:Destroy() end)
+end
+
+local function chequearAdmin(p)
+    if p == player then return end
+    if esAdmin(p) then panicMode() end
+end
+
+for _, p in pairs(game.Players:GetPlayers()) do
+    task.spawn(chequearAdmin, p)
+end
+
+game.Players.PlayerAdded:Connect(function(p)
+    task.wait(1)
+    chequearAdmin(p)
 end)
