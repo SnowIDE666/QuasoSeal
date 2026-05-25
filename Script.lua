@@ -8,6 +8,7 @@ local VIM = game:GetService("VirtualInputManager")
 local flyActive, staminaActive, espActive = false, false, false
 local autoFishActive, speedActive = false, false
 local esperandoReset = false
+local forzarResetSpot = false  -- se activa cuando se hace tp a spot suertudo
 local flySpeed = 50
 local bodyVel, bodyGyro
 local staminaConexiones, espConexiones, highlights = {}, {}, {}
@@ -268,6 +269,12 @@ local function autoFishLoop()
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
         while autoFishActive do
+            -- salir si se hizo tp a otro spot
+            if forzarResetSpot then
+                vimRelease()
+                forzarResetSpot = false
+                break
+            end
             -- FIX: vimRelease() antes del break para soltar el click virtual
             local n, max = getNumFish()
             if n >= max then
@@ -279,6 +286,7 @@ local function autoFishLoop()
             local clickThread = task.spawn(function()
                 local t0 = tick()
                 while autoFishActive and tick() - t0 < 10 do
+                    if forzarResetSpot then break end
                     local fg = pgui:FindFirstChild("FishingGameUI")
                     if fg and fg.Enabled then break end
                     if not esperandoReset then refClick() end
@@ -287,12 +295,14 @@ local function autoFishLoop()
             end)
             local t0 = tick()
             while autoFishActive and tick() - t0 < 10 do
+                if forzarResetSpot then break end
                 fishingGui = pgui:FindFirstChild("FishingGameUI")
                 if fishingGui and fishingGui.Enabled then break end
                 task.wait(0.03)
             end
             task.cancel(clickThread)
             if not autoFishActive then break end
+            if forzarResetSpot then vimRelease() forzarResetSpot = false break end
             if not fishingGui or not fishingGui.Enabled then break end
 
             local cp = nil
@@ -334,6 +344,8 @@ local function autoFishLoop()
 
             local tL = tick()
             while autoFishActive and tick() - tL < 6 do
+                -- salir si se hizo tp a otro spot
+                if forzarResetSpot then vimRelease() forzarResetSpot = false break end
                 -- FIX: chequear mochila dentro del loop de espera también
                 local nL, maxL = getNumFish()
                 if nL >= maxL then vimRelease() break end
@@ -907,6 +919,215 @@ local function crearPaleta(parent)
     end
 end
 
+local function crearSeccionLucky(parent)
+    local header = Instance.new("TextButton", parent)
+    header.Size = UDim2.new(1, 0, 0, 42)
+    header.BackgroundColor3 = Color3.fromRGB(19, 19, 24)
+    header.BorderSizePixel = 0 header.Text = ""
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 10)
+    local hStroke = Instance.new("UIStroke", header)
+    hStroke.Color = Color3.fromRGB(32, 32, 42) hStroke.Thickness = 1
+
+    local hLabel = Instance.new("TextLabel", header)
+    hLabel.Size = UDim2.new(1, -36, 1, 0)
+    hLabel.Position = UDim2.new(0, 14, 0, 0)
+    hLabel.BackgroundTransparency = 1
+    hLabel.Text = "⭐ SPOTS SUERTUDOS"
+    hLabel.TextColor3 = COLOR_ACTIVA
+    hLabel.Font = Enum.Font.GothamBold
+    hLabel.TextSize = 13
+    hLabel.TextXAlignment = Enum.TextXAlignment.Left
+    registrarColor(hLabel, "TextColor3")
+
+    local hArrow = Instance.new("TextLabel", header)
+    hArrow.Size = UDim2.new(0, 26, 1, 0)
+    hArrow.Position = UDim2.new(1, -30, 0, 0)
+    hArrow.BackgroundTransparency = 1
+    hArrow.Text = "▼"
+    hArrow.TextColor3 = COLOR_ACTIVA
+    hArrow.Font = Enum.Font.GothamBold
+    hArrow.TextSize = 13
+    registrarColor(hArrow, "TextColor3")
+
+    local listFrame = Instance.new("Frame", parent)
+    listFrame.Size = UDim2.new(1, 0, 0, 0)
+    listFrame.BackgroundColor3 = Color3.fromRGB(17, 17, 21)
+    listFrame.BorderSizePixel = 0
+    listFrame.ClipsDescendants = true
+    Instance.new("UICorner", listFrame).CornerRadius = UDim.new(0, 10)
+    local lStroke = Instance.new("UIStroke", listFrame)
+    lStroke.Color = Color3.fromRGB(32,32,42) lStroke.Thickness = 1
+
+    local listScroll = Instance.new("ScrollingFrame", listFrame)
+    listScroll.Size = UDim2.new(1, -8, 1, -8)
+    listScroll.Position = UDim2.new(0, 4, 0, 4)
+    listScroll.BackgroundTransparency = 1
+    listScroll.BorderSizePixel = 0
+    listScroll.ScrollBarThickness = 3
+    listScroll.ScrollBarImageColor3 = Color3.fromRGB(55,55,70)
+    listScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    local listLayout = Instance.new("UIListLayout", listScroll)
+    listLayout.Padding = UDim.new(0, 5)
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local ITEM_H, MAX_V = 42, 4
+    local abierto = false
+    local luckyRows = {}
+    local luckyConexiones = {}
+
+    local function calcAltura(count)
+        return math.min(count, MAX_V) * (ITEM_H + 5) + 8
+    end
+
+    local function actualizarLista()
+        for _, r in pairs(luckyRows) do if r and r.Parent then r:Destroy() end end
+        luckyRows = {}
+        local count = 0
+        local spotsFolder = workspace:FindFirstChild("FishingSpots")
+        if not spotsFolder then return end
+        for i, spot in pairs(spotsFolder:GetChildren()) do
+            local lucky = spot:FindFirstChild("LuckySpawned")
+            if not lucky or not lucky.Value then continue end
+
+            local row = Instance.new("Frame", listScroll)
+            row.Size = UDim2.new(1, 0, 0, ITEM_H)
+            row.BackgroundColor3 = Color3.fromRGB(23, 23, 29)
+            row.BorderSizePixel = 0
+            Instance.new("UICorner", row).CornerRadius = UDim.new(0, 8)
+
+            local lootType = spot:FindFirstChild("LootType")
+            local lootTxt = lootType and lootType.Value ~= "" and lootType.Value or ("Spot " .. i)
+
+            local nom = Instance.new("TextLabel", row)
+            nom.Size = UDim2.new(1, -72, 1, 0)
+            nom.Position = UDim2.new(0, 12, 0, 0)
+            nom.BackgroundTransparency = 1
+            nom.Text = "⭐ " .. lootTxt
+            nom.TextColor3 = Color3.fromRGB(245, 200, 80)
+            nom.Font = Enum.Font.GothamMedium
+            nom.TextSize = 13
+            nom.TextXAlignment = Enum.TextXAlignment.Left
+
+            local tpBtn = Instance.new("TextButton", row)
+            tpBtn.Size = UDim2.new(0, 52, 0, 26)
+            tpBtn.Position = UDim2.new(1, -60, 0.5, -13)
+            tpBtn.BackgroundColor3 = COLOR_ACTIVA
+            tpBtn.BorderSizePixel = 0
+            tpBtn.Text = "Ir"
+            tpBtn.TextColor3 = Color3.new(1,1,1)
+            tpBtn.Font = Enum.Font.GothamBold
+            tpBtn.TextSize = 13
+            Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 7)
+            registrarColor(tpBtn, "BackgroundColor3")
+
+            local spotRef = spot
+            tpBtn.MouseButton1Click:Connect(function()
+                local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                if not hrp or not spotRef or not spotRef.Parent then return end
+                local part = spotRef:IsA("BasePart") and spotRef or spotRef:FindFirstChildWhichIsA("BasePart")
+                if not part then return end
+
+                -- Materiales considerados tierra solida (excluye Plastic = agua/lava liquida)
+                local materialesSolidos = {
+                    [Enum.Material.Glacier]     = true,
+                    [Enum.Material.Snow]        = true,
+                    [Enum.Material.Basalt]      = true,
+                    [Enum.Material.Rock]        = true,
+                    [Enum.Material.CrackedLava] = true,
+                    [Enum.Material.Ground]      = true,
+                    [Enum.Material.Grass]       = true,
+                    [Enum.Material.Sand]        = true,
+                    [Enum.Material.Wood]        = true,
+                    [Enum.Material.SmoothPlastic] = true,
+                }
+
+                -- Buscar tierra mas cercana en espiral alrededor del spot
+                local bestPos = nil
+                local bestDist = math.huge
+                for dist = 15, 80, 5 do
+                    for angulo = 0, 315, 45 do
+                        local rad = math.rad(angulo)
+                        local offset = Vector3.new(math.cos(rad)*dist, 60, math.sin(rad)*dist)
+                        local origen = part.Position + offset
+                        local ray = workspace:Raycast(origen, Vector3.new(0, -150, 0))
+                        if ray and materialesSolidos[ray.Material] and dist < bestDist then
+                            bestDist = dist
+                            bestPos = ray.Position
+                        end
+                    end
+                    if bestPos then break end
+                end
+
+                if bestPos then
+                    forzarResetSpot = true
+                    hrp.CFrame = CFrame.new(bestPos + Vector3.new(0, 4, 0))
+                else
+                    forzarResetSpot = true
+                    hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 10, 0))
+                end
+
+                TS:Create(tpBtn, TweenInfo.new(0.1), { BackgroundColor3 = Color3.fromRGB(80,200,120) }):Play()
+                task.delay(0.4, function()
+                    TS:Create(tpBtn, TweenInfo.new(0.2), { BackgroundColor3 = COLOR_ACTIVA }):Play()
+                end)
+            end)
+
+            count += 1
+            table.insert(luckyRows, row)
+        end
+
+        -- Mensaje si no hay spots activos
+        if count == 0 then
+            local empty = Instance.new("TextLabel", listScroll)
+            empty.Size = UDim2.new(1, 0, 0, ITEM_H)
+            empty.BackgroundTransparency = 1
+            empty.Text = "No hay spots suertudos activos"
+            empty.TextColor3 = Color3.fromRGB(90, 90, 105)
+            empty.Font = Enum.Font.Gotham
+            empty.TextSize = 13
+            table.insert(luckyRows, empty)
+            count = 1
+        end
+
+        listScroll.CanvasSize = UDim2.new(0, 0, 0, count * (ITEM_H + 5))
+        if abierto then
+            TS:Create(listFrame, tweenInfo, { Size = UDim2.new(1, 0, 0, calcAltura(count)) }):Play()
+        end
+    end
+
+    -- Escuchar cambios de LuckySpawned en tiempo real
+    local function engancharSpots()
+        for _, c in pairs(luckyConexiones) do c:Disconnect() end
+        luckyConexiones = {}
+        local spotsFolder = workspace:FindFirstChild("FishingSpots")
+        if not spotsFolder then return end
+        for _, spot in pairs(spotsFolder:GetChildren()) do
+            local lucky = spot:FindFirstChild("LuckySpawned")
+            if lucky then
+                local c = lucky.Changed:Connect(function()
+                    if abierto then actualizarLista() end
+                end)
+                table.insert(luckyConexiones, c)
+            end
+        end
+    end
+
+    header.MouseButton1Click:Connect(function()
+        abierto = not abierto
+        hArrow.Text = abierto and "▲" or "▼"
+        if abierto then
+            engancharSpots()
+            actualizarLista()
+            TS:Create(header, TweenInfo.new(0.12), { BackgroundColor3 = Color3.fromRGB(24,16,42) }):Play()
+        else
+            for _, c in pairs(luckyConexiones) do c:Disconnect() end
+            luckyConexiones = {}
+            TS:Create(listFrame, tweenInfo, { Size = UDim2.new(1, 0, 0, 0) }):Play()
+            TS:Create(header, TweenInfo.new(0.12), { BackgroundColor3 = Color3.fromRGB(19,19,24) }):Play()
+        end
+    end)
+end
+
 local function crearSeccionTeleport(parent)
     local header = Instance.new("TextButton", parent)
     header.Size = UDim2.new(1, 0, 0, 42)
@@ -1059,6 +1280,7 @@ crearToggle(pageJugador, "ESP Focas", "Resalta jugadores en verde",
 fishSwBtn, fishSwDot = crearToggle(pageJugador, "Auto Pesca", "Pesca y vende automaticamente  [Q]",
     function(on) if on then activarAutoFish() else desactivarAutoFish() end end)
 
+crearSeccionLucky(pageJugador)
 crearSeccionTeleport(pageJugador)
 
 -- ============================================================
