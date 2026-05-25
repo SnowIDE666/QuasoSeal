@@ -274,6 +274,26 @@ local function autoFishLoop()
         pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
+        -- Arrancar clicks inmediatamente en paralelo sin esperar la GUI
+        task.spawn(function()
+            local fireTimer = 0
+            while autoFishActive do
+                local fg = pgui:FindFirstChild("FishingGameUI")
+                if fg and fg.Enabled then break end
+                if not esperandoReset then
+                    refClick()
+                    local now = tick()
+                    if now - fireTimer >= 0.3 then
+                        fireTimer = now
+                        pcall(function() fireproximityprompt(pp) end)
+                        pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
+                        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+                    end
+                end
+                task.wait(0.03)
+            end
+        end)
+
         while autoFishActive do
             if forzarResetSpot then
                 vimRelease()
@@ -289,23 +309,10 @@ local function autoFishLoop()
             local fishingGui = pgui:FindFirstChild("FishingGameUI")
             if not (fishingGui and fishingGui.Enabled) then
                 local t1 = tick()
-                local fireTimer = 0
                 while autoFishActive and tick() - t1 < 12 do
                     if forzarResetSpot then break end
                     fishingGui = pgui:FindFirstChild("FishingGameUI")
                     if fishingGui and fishingGui.Enabled then break end
-                    if not esperandoReset then
-                        -- Click para sacudir la caña (comportamiento original)
-                        refClick()
-                        -- Reintentar E + fireproximityprompt cada 0.3s por si el spot no se activó
-                        local now = tick()
-                        if now - fireTimer >= 0.3 then
-                            fireTimer = now
-                            pcall(function() fireproximityprompt(pp) end)
-                            pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
-                            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-                        end
-                    end
                     task.wait(0.03)
                 end
             end
@@ -332,21 +339,40 @@ local function autoFishLoop()
             task.spawn(function() handleClickPrompt(cp, fishingGui) end)
             while autoFishActive and fishingGui.Enabled do task.wait(0.03) end
 
-            -- OPTIMIZADO: timeout FishGetUI reducido de 1.5s a 0.5s
-            esperandoReset = true
+            -- FishGetUI: evento instantaneo en lugar de polling con waits
             local fishGetUI = pgui:FindFirstChild("FishGetUI")
             if fishGetUI then
-                local t1 = tick()
-                repeat task.wait(0.016) until fishGetUI.Enabled or tick() - t1 > 0.5
                 if fishGetUI.Enabled then
+                    -- Ya estaba visible, cerrar de inmediato
+                    esperandoReset = true
                     while fishGetUI.Enabled and autoFishActive do
                         refClick()
-                        task.wait(0.04)
+                        task.wait(0.03)
+                    end
+                    esperandoReset = false
+                else
+                    -- Conectar evento exacto, sin polling
+                    local appeared = false
+                    local conn
+                    conn = fishGetUI:GetPropertyChangedSignal("Enabled"):Connect(function()
+                        if fishGetUI.Enabled then appeared = true end
+                    end)
+                    local t1 = tick()
+                    while not appeared and autoFishActive and tick() - t1 < 0.3 do
+                        task.wait(0.016)
+                    end
+                    conn:Disconnect()
+                    if appeared then
+                        esperandoReset = true
+                        while fishGetUI.Enabled and autoFishActive do
+                            refClick()
+                            task.wait(0.03)
+                        end
+                        esperandoReset = false
                     end
                 end
             end
-            refClick() task.wait(0.03)
-            esperandoReset = false
+            refClick()
 
             local nCheck, maxCheck = getNumFish()
             if nCheck >= maxCheck then
@@ -354,18 +380,37 @@ local function autoFishLoop()
                 break
             end
 
-            -- OPTIMIZADO: timeout re-lanzar reducido de 6s a 3s, paso de 0.05 a 0.016 (1 frame)
+            -- Re-lanzar: mandar E y arrancar clicks en paralelo de inmediato
+            pcall(function() fireproximityprompt(pp) end)
+            pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
+            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+            task.spawn(function()
+                local fireTimer2 = 0
+                while autoFishActive do
+                    local fg = pgui:FindFirstChild("FishingGameUI")
+                    if fg and fg.Enabled then break end
+                    if not esperandoReset then
+                        refClick()
+                        local now = tick()
+                        if now - fireTimer2 >= 0.3 then
+                            fireTimer2 = now
+                            pcall(function() fireproximityprompt(pp) end)
+                            pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
+                            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+                        end
+                    end
+                    task.wait(0.03)
+                end
+            end)
+            -- Esperar a que aparezca la GUI (max 3s)
             local tL = tick()
             while autoFishActive and tick() - tL < 3 do
                 if forzarResetSpot then vimRelease() forzarResetSpot = false break end
                 local nL, maxL = getNumFish()
                 if nL >= maxL then vimRelease() break end
-                pcall(function() fireproximityprompt(pp) end)
-                pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
-                pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
                 local fg = pgui:FindFirstChild("FishingGameUI")
                 if fg and fg.Enabled then break end
-                task.wait(0.016)  -- OPTIMIZADO: 0.05 → 0.016 (1 frame)
+                task.wait(0.016)
             end
         end
     end
