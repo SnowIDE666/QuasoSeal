@@ -1,4 +1,4 @@
--- QUASOSEAL MENU v2.4
+-- QUASOSEAL MENU v2.5
 local player = game.Players.LocalPlayer
 local RS = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -160,9 +160,46 @@ RS.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- AUTO PESCA
+-- AUTO PESCA - HELPERS
 -- ============================================================
-local function getNearestSpot(soloSparkly)
+local function getNumFish()
+    local vars = player:FindFirstChild("PlayerInfo")
+        and player.PlayerInfo:FindFirstChild("Vars")
+    if not vars then return 0, 20 end
+    local numFish = vars:FindFirstChild("NumFish")
+    local fishSlots = vars:FindFirstChild("FishSlots")
+    return numFish and numFish.Value or 0, fishSlots and fishSlots.Value or 20
+end
+
+local function venderPeces()
+    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    local posOriginal = hrp.CFrame
+    local mejorPP, mejorPart = nil, nil
+    local mejorDist = math.huge
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v.Name == "SellAllFish" and v:IsA("ProximityPrompt") then
+            local part = v.Parent
+            if part and part:IsA("BasePart") then
+                local dist = (part.Position - hrp.Position).Magnitude
+                if dist < mejorDist then
+                    mejorDist = dist
+                    mejorPP = v
+                    mejorPart = part
+                end
+            end
+        end
+    end
+    if not mejorPP then return false end
+    hrp.CFrame = CFrame.new(mejorPart.Position + Vector3.new(0, 3, 3))
+    task.wait(0.5)  -- FIX: subido de 0.3 a 0.5 para que el servidor procese la posición
+    pcall(function() fireproximityprompt(mejorPP) end)
+    task.wait(1.5)  -- FIX: subido de 1.0 a 1.5 para dar tiempo a que complete la venta
+    hrp.CFrame = posOriginal
+    return true
+end
+
+local function getNearestSpot()
     local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
     local spotsFolder = workspace:FindFirstChild("FishingSpots")
@@ -172,10 +209,6 @@ local function getNearestSpot(soloSparkly)
         local part = spot:IsA("BasePart") and spot or spot:FindFirstChildWhichIsA("BasePart")
         local pp = spot:FindFirstChild("ProximityPrompt")
         if not part or not pp then continue end
-        if soloSparkly then
-            local isSparkly = spot:FindFirstChild("IsSparkly")
-            if not isSparkly or not isSparkly.Value then continue end
-        end
         local isEnabled = spot:FindFirstChild("IsEnabled")
         if isEnabled and not isEnabled.Value then continue end
         local dist = (part.Position - hrp.Position).Magnitude
@@ -209,10 +242,23 @@ end
 
 local fishSwBtn, fishSwDot
 
+-- ============================================================
+-- AUTO PESCA - LOOP PRINCIPAL
+-- ============================================================
 local function autoFishLoop()
     local pgui = player.PlayerGui
     while autoFishActive do
-        local spot = getNearestSpot(false)
+
+        -- Verificar si mochila llena y vender
+        local numFish, fishSlots = getNumFish()
+        if numFish >= fishSlots then
+            vimRelease()
+            venderPeces()
+            task.wait(0.5)
+            continue
+        end
+
+        local spot = getNearestSpot()
         if not spot then task.wait(0.5) continue end
         local pp = spot:FindFirstChild("ProximityPrompt")
         if not pp then task.wait(0.5) continue end
@@ -222,6 +268,13 @@ local function autoFishLoop()
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
 
         while autoFishActive do
+            -- FIX: vimRelease() antes del break para soltar el click virtual
+            local n, max = getNumFish()
+            if n >= max then
+                vimRelease()
+                break
+            end
+
             local fishingGui = pgui:FindFirstChild("FishingGameUI")
             local clickThread = task.spawn(function()
                 local t0 = tick()
@@ -272,8 +325,18 @@ local function autoFishLoop()
             end
             esperandoReset = false
 
+            -- FIX: si la mochila se llenó con este pez, salir ya sin esperar el loop de 6 seg
+            local nCheck, maxCheck = getNumFish()
+            if nCheck >= maxCheck then
+                vimRelease()
+                break
+            end
+
             local tL = tick()
             while autoFishActive and tick() - tL < 6 do
+                -- FIX: chequear mochila dentro del loop de espera también
+                local nL, maxL = getNumFish()
+                if nL >= maxL then vimRelease() break end
                 pcall(function() fireproximityprompt(pp) end)
                 pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
                 pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
@@ -334,7 +397,6 @@ local function abrirTerminal()
     tBar.BorderSizePixel = 0
     Instance.new("UICorner", tBar).CornerRadius = UDim.new(0, 12)
 
-    -- separador guardado para ocultarlo al minimizar
     local tSep = Instance.new("Frame", tBar)
     tSep.Size = UDim2.new(1, 0, 0, 1)
     tSep.Position = UDim2.new(0, 0, 1, -1)
@@ -458,7 +520,6 @@ local function abrirTerminal()
         terminalSg = nil
     end)
 
-    -- FIX LÍNEA TERMINAL: transparencia + ocultar separador al minimizar
     minBtn.MouseButton1Click:Connect(function()
         tMin = not tMin
         scroll.Visible = not tMin
@@ -496,7 +557,7 @@ local function abrirTerminal()
         if inp.UserInputType == Enum.UserInputType.MouseButton1 then d2 = false end
     end)
 
-    log("QuasoSeal Terminal v2.4", COLOR_ACTIVA)
+    log("QuasoSeal Terminal v2.5", COLOR_ACTIVA)
     log("Ejecuta cualquier codigo Lua aqui", Color3.fromRGB(90, 90, 105))
 end
 
@@ -521,7 +582,6 @@ frame.BorderSizePixel = 0
 frame.ClipsDescendants = true
 Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 14)
 
--- ── TITLEBAR ──────────────────────────────────────────────
 local titlebar = Instance.new("Frame", frame)
 titlebar.Size = UDim2.new(1, 0, 0, 46)
 titlebar.BackgroundColor3 = Color3.fromRGB(19, 19, 23)
@@ -560,7 +620,6 @@ end
 local btnCerrar    = crearDot(Color3.fromRGB(235, 75, 75),  0)
 local btnMinimizar = crearDot(Color3.fromRGB(240, 185, 50), 22)
 
--- ── TABS ──────────────────────────────────────────────────
 local tabsBar = Instance.new("Frame", frame)
 tabsBar.Size = UDim2.new(1, -20, 0, 34)
 tabsBar.Position = UDim2.new(0, 10, 0, 54)
@@ -585,7 +644,6 @@ end
 local tabJugador = crearTabBtn("Jugador", 0)
 local tabDev     = crearTabBtn("Desarrollador", 0.5)
 
--- ── SCROLL PRINCIPAL ──────────────────────────────────────
 local mainScroll = Instance.new("ScrollingFrame", frame)
 mainScroll.Size = UDim2.new(1, 0, 1, -96)
 mainScroll.Position = UDim2.new(0, 0, 0, 96)
@@ -652,7 +710,6 @@ btnCerrar.MouseButton1Click:Connect(function()
     sg:Destroy()
 end)
 
--- FIX LÍNEA MENÚ: transparencia + separador oculto al minimizar
 btnMinimizar.MouseButton1Click:Connect(function()
     minimizado = not minimizado
     tabsBar.Visible = not minimizado
@@ -664,7 +721,9 @@ btnMinimizar.MouseButton1Click:Connect(function()
     }):Play()
 end)
 
--- ── HELPERS UI ────────────────────────────────────────────
+-- ============================================================
+-- HELPERS UI
+-- ============================================================
 local function crearToggle(parent, nombre, desc, callback)
     local row = Instance.new("Frame", parent)
     row.Size = UDim2.new(1, 0, 0, 60)
@@ -779,7 +838,6 @@ local function crearBoton(parent, nombre, desc, callback)
     end)
 end
 
--- ── PALETA DE COLORES ─────────────────────────────────────
 local function crearPaleta(parent)
     local row = Instance.new("Frame", parent)
     row.Size = UDim2.new(1, 0, 0, 60)
@@ -849,7 +907,6 @@ local function crearPaleta(parent)
     end
 end
 
--- ── SECCIÓN TELEPORT ──────────────────────────────────────
 local function crearSeccionTeleport(parent)
     local header = Instance.new("TextButton", parent)
     header.Size = UDim2.new(1, 0, 0, 42)
@@ -980,7 +1037,9 @@ local function crearSeccionTeleport(parent)
     game.Players.PlayerRemoving:Connect(function() task.wait(0.1) if abierto then actualizarLista() end end)
 end
 
--- ── PESTAÑA JUGADOR ───────────────────────────────────────
+-- ============================================================
+-- PESTAÑA JUGADOR
+-- ============================================================
 crearToggle(pageJugador, "Fly", "Volar con la camara",
     function(on) flyActive = on if on then iniciarFly() else detenerFly() end end)
 
@@ -997,19 +1056,23 @@ crearToggle(pageJugador, "Stamina infinita", "Mantiene swim stamina al maximo",
 crearToggle(pageJugador, "ESP Focas", "Resalta jugadores en verde",
     function(on) espActive = on if on then activarEsp() else desactivarEsp() end end)
 
-fishSwBtn, fishSwDot = crearToggle(pageJugador, "Auto Pesca", "Parate en un spot  [Q]",
+fishSwBtn, fishSwDot = crearToggle(pageJugador, "Auto Pesca", "Pesca y vende automaticamente  [Q]",
     function(on) if on then activarAutoFish() else desactivarAutoFish() end end)
 
 crearSeccionTeleport(pageJugador)
 
--- ── PESTAÑA DEV ───────────────────────────────────────────
+-- ============================================================
+-- PESTAÑA DEV
+-- ============================================================
 crearBoton(pageDev, "Terminal", "Abrir consola Lua", abrirTerminal)
 crearBoton(pageDev, "Dex Explorer", "Explorador de instancias", function()
     pcall(function() loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-Dex-Explorer-DPP-73687"))() end)
 end)
 crearPaleta(pageDev)
 
--- ── ATAJO Q ───────────────────────────────────────────────
+-- ============================================================
+-- ATAJO Q
+-- ============================================================
 UIS.InputBegan:Connect(function(inp, gameProcessed)
     if gameProcessed then return end
     if inp.KeyCode == Enum.KeyCode.Q then
@@ -1017,7 +1080,9 @@ UIS.InputBegan:Connect(function(inp, gameProcessed)
     end
 end)
 
--- ── FLY LOOP ──────────────────────────────────────────────
+-- ============================================================
+-- FLY LOOP
+-- ============================================================
 RS.RenderStepped:Connect(function()
     if flyActive and player.Character then
         local hrp = player.Character:FindFirstChild("HumanoidRootPart")
@@ -1029,7 +1094,9 @@ RS.RenderStepped:Connect(function()
     end
 end)
 
--- ── ARRASTRAR ─────────────────────────────────────────────
+-- ============================================================
+-- ARRASTRAR
+-- ============================================================
 local dragging, dragStart, startPos
 titlebar.InputBegan:Connect(function(inp)
     if inp.UserInputType == Enum.UserInputType.MouseButton1 then
