@@ -1,4 +1,4 @@
--- QUASOSEAL MENU v2.5
+-- QUASOSEAL MENU v2.5 (OPTIMIZADO - Auto Pesca mejorada)
 local player = game.Players.LocalPlayer
 local RS = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
@@ -193,10 +193,12 @@ local function venderPeces()
     end
     if not mejorPP then return false end
     hrp.CFrame = CFrame.new(mejorPart.Position + Vector3.new(0, 3, 3))
-    task.wait(0.5)
+    task.wait(0.5)   -- necesario: servidor debe registrar posicion antes de fireproximityprompt
     pcall(function() fireproximityprompt(mejorPP) end)
-    task.wait(1.5)
-    hrp.CFrame = posOriginal
+    task.wait(1.5)   -- necesario: servidor procesa la venta y actualiza NumFish
+    local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if hrp2 then hrp2.CFrame = posOriginal end
+    task.wait(0.3)
     return true
 end
 
@@ -224,13 +226,13 @@ local function handleClickPrompt(cp, fishingGui)
         if txt:find("Press & Hold") or txt:find("Hold") then
             local vs = workspace.CurrentCamera.ViewportSize
             local x, y = vs.X / 2, vs.Y / 2
+            pcall(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
             while autoFishActive and fishingGui.Enabled do
                 if not (cp.Text:find("Press & Hold") or cp.Text:find("Hold")) then
                     pcall(function() VIM:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
                     break
                 end
-                pcall(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
-                task.wait(0.05)
+                task.wait(0.03)
             end
         else
             refClick()
@@ -244,7 +246,7 @@ end
 local fishSwBtn, fishSwDot
 
 -- ============================================================
--- AUTO PESCA - LOOP PRINCIPAL
+-- AUTO PESCA - LOOP PRINCIPAL (OPTIMIZADO)
 -- ============================================================
 local function autoFishLoop()
     local pgui = player.PlayerGui
@@ -252,16 +254,22 @@ local function autoFishLoop()
         local numFish, fishSlots = getNumFish()
         if numFish >= fishSlots then
             vimRelease()
-            venderPeces()
-            task.wait(0.5)
+            local intentos = 0
+            repeat
+                venderPeces()
+                task.wait(0.5)
+                intentos += 1
+                numFish, fishSlots = getNumFish()
+            until numFish < fishSlots or intentos >= 3
             continue
         end
 
         local spot = getNearestSpot()
-        if not spot then task.wait(0.5) continue end
+        if not spot then task.wait(0.1) continue end  -- OPTIMIZADO: 0.5 → 0.1
         local pp = spot:FindFirstChild("ProximityPrompt")
-        if not pp then task.wait(0.5) continue end
+        if not pp then task.wait(0.1) continue end    -- OPTIMIZADO: 0.5 → 0.1
 
+        -- Activar spot sin delays
         pcall(function() fireproximityprompt(pp) end)
         pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
         pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
@@ -278,35 +286,28 @@ local function autoFishLoop()
                 break
             end
 
-            -- Esperar ShakeBobberUI (caña en el agua)
             local fishingGui = pgui:FindFirstChild("FishingGameUI")
             if not (fishingGui and fishingGui.Enabled) then
-                local t0 = tick()
-                while autoFishActive and tick() - t0 < 8 do
-                    if forzarResetSpot then break end
-                    local shakeUI = pgui:FindFirstChild("ShakeBobberUI")
-                    if shakeUI and shakeUI.Enabled then break end
-                    task.wait(0.03)
-                end
-                -- ShakeBobberUI activo: sacudir con clicks hasta FishingGameUI
-                local clickThread = task.spawn(function()
-                    local t1 = tick()
-                    while autoFishActive and tick() - t1 < 10 do
-                        if forzarResetSpot then break end
-                        local fg = pgui:FindFirstChild("FishingGameUI")
-                        if fg and fg.Enabled then break end
-                        if not esperandoReset then refClick() end
-                        task.wait(0.05)
-                    end
-                end)
                 local t1 = tick()
-                while autoFishActive and tick() - t1 < 10 do
+                local fireTimer = 0
+                while autoFishActive and tick() - t1 < 12 do
                     if forzarResetSpot then break end
                     fishingGui = pgui:FindFirstChild("FishingGameUI")
                     if fishingGui and fishingGui.Enabled then break end
+                    if not esperandoReset then
+                        -- Click para sacudir la caña (comportamiento original)
+                        refClick()
+                        -- Reintentar E + fireproximityprompt cada 0.3s por si el spot no se activó
+                        local now = tick()
+                        if now - fireTimer >= 0.3 then
+                            fireTimer = now
+                            pcall(function() fireproximityprompt(pp) end)
+                            pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
+                            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+                        end
+                    end
                     task.wait(0.03)
                 end
-                task.cancel(clickThread)
             end
 
             if not autoFishActive then break end
@@ -314,34 +315,37 @@ local function autoFishLoop()
             if not fishingGui or not fishingGui.Enabled then break end
 
             local cp = nil
-            local catchBar = fishingGui:FindFirstChild("CatchBar")
-            if catchBar then cp = catchBar:FindFirstChild("ClickPrompt") end
-            if not cp then
-                for _, v in pairs(fishingGui:GetDescendants()) do
-                    if v.Name == "ClickPrompt" then cp = v break end
+            local tCP = tick()
+            while not cp and autoFishActive and tick() - tCP < 3 do
+                local catchBar = fishingGui:FindFirstChild("CatchBar")
+                if catchBar then cp = catchBar:FindFirstChild("ClickPrompt") end
+                if not cp then
+                    for _, v in pairs(fishingGui:GetDescendants()) do
+                        if v.Name == "ClickPrompt" then cp = v break end
+                    end
                 end
+                if not cp then task.wait(0.03) end
             end
+
             if not cp then break end
 
             task.spawn(function() handleClickPrompt(cp, fishingGui) end)
             while autoFishActive and fishingGui.Enabled do task.wait(0.03) end
 
-            -- Post-pesca: esperar FishGetUI y dar clicks hasta que se cierre
+            -- OPTIMIZADO: timeout FishGetUI reducido de 1.5s a 0.5s
             esperandoReset = true
             local fishGetUI = pgui:FindFirstChild("FishGetUI")
             if fishGetUI then
                 local t1 = tick()
-                repeat task.wait(0.03) until fishGetUI.Enabled or tick() - t1 > 5
+                repeat task.wait(0.016) until fishGetUI.Enabled or tick() - t1 > 0.5
                 if fishGetUI.Enabled then
                     while fishGetUI.Enabled and autoFishActive do
                         refClick()
-                        task.wait(0.05)
+                        task.wait(0.04)
                     end
                 end
-            else
-                refClick() task.wait(0.03)
-                refClick() task.wait(0.03)
             end
+            refClick() task.wait(0.03)
             esperandoReset = false
 
             local nCheck, maxCheck = getNumFish()
@@ -350,20 +354,18 @@ local function autoFishLoop()
                 break
             end
 
-            -- Re-lanzar: reintentar proximity + E hasta que ShakeBobberUI o FishingGameUI aparezca
+            -- OPTIMIZADO: timeout re-lanzar reducido de 6s a 3s, paso de 0.05 a 0.016 (1 frame)
             local tL = tick()
-            while autoFishActive and tick() - tL < 6 do
+            while autoFishActive and tick() - tL < 3 do
                 if forzarResetSpot then vimRelease() forzarResetSpot = false break end
                 local nL, maxL = getNumFish()
                 if nL >= maxL then vimRelease() break end
                 pcall(function() fireproximityprompt(pp) end)
                 pcall(function() VIM:SendKeyEvent(true,  Enum.KeyCode.E, false, game) end)
                 pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
-                task.wait(0.05)
-                local shakeUI = pgui:FindFirstChild("ShakeBobberUI")
                 local fg = pgui:FindFirstChild("FishingGameUI")
-                if (shakeUI and shakeUI.Enabled) or (fg and fg.Enabled) then break end
-                task.wait(0.05)
+                if fg and fg.Enabled then break end
+                task.wait(0.016)  -- OPTIMIZADO: 0.05 → 0.016 (1 frame)
             end
         end
     end
@@ -475,7 +477,6 @@ local function abrirTerminal()
         end)
     end
 
-    -- Input box: una sola línea, visualmente igual al original
     local inputBg = Instance.new("Frame", tFrame)
     inputBg.Size = UDim2.new(1, -16, 0, 0)
     inputBg.AutomaticSize = Enum.AutomaticSize.Y
@@ -538,14 +539,11 @@ local function abrirTerminal()
         if not ok then log(tostring(err), Color3.fromRGB(255, 100, 100)) end
     end
 
-    -- Enter ejecuta, Shift+Enter hace salto de línea
     inputBox:GetPropertyChangedSignal("Text"):Connect(function()
         local txt = inputBox.Text
         if txt:sub(-1) == "\n" then
             if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift) then
-                -- Shift+Enter: dejar el salto de línea
             else
-                -- Enter solo: quitar el \n y ejecutar
                 inputBox.Text = txt:sub(1, -2)
                 ejecutarCodigo()
             end
