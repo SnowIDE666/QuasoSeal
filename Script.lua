@@ -172,34 +172,58 @@ local function getNumFish()
     return numFish and numFish.Value or 0, fishSlots and fishSlots.Value or 20
 end
 
-local function venderPeces()
-    local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    local posOriginal = hrp.CFrame
-    local mejorPP, mejorPart = nil, nil
-    local mejorDist = math.huge
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v.Name == "SellAllFish" and v:IsA("ProximityPrompt") then
-            local part = v.Parent
-            if part and part:IsA("BasePart") then
-                local dist = (part.Position - hrp.Position).Magnitude
-                if dist < mejorDist then
-                    mejorDist = dist
-                    mejorPP = v
-                    mejorPart = part
-                end
+-- Cache del ProximityPrompt de venta (se busca una sola vez)
+local _sellPP = nil
+local _sellPart = nil
+
+local function getSellPP()
+    if _sellPP and _sellPP.Parent then return _sellPP, _sellPart end
+    _sellPP = nil _sellPart = nil
+    -- Buscar SellAllFish ProximityPrompt en todo HomeBerg
+    pcall(function()
+        local homeBerg = workspace:FindFirstChild("HomeBerg")
+        if not homeBerg then return end
+        for _, v in pairs(homeBerg:GetDescendants()) do
+            if v.Name == "SellAllFish" and v:IsA("ProximityPrompt") then
+                _sellPP = v
+                _sellPart = v.Parent
+                return
             end
         end
+    end)
+    return _sellPP, _sellPart
+end
+
+local _sellEvent = nil
+local function getSellEvent()
+    if _sellEvent and _sellEvent.Parent then return _sellEvent end
+    _sellEvent = nil
+    pcall(function()
+        local homeBerg = workspace:FindFirstChild("HomeBerg")
+        if not homeBerg then return end
+        for _, v in pairs(homeBerg:GetDescendants()) do
+            if v.Name == "SellFish" and v:IsA("RemoteEvent") then
+                _sellEvent = v
+                return
+            end
+        end
+    end)
+    return _sellEvent
+end
+
+local function venderPeces()
+    local ev = getSellEvent()
+    if ev then
+        pcall(function() ev:FireServer() end)
+        return true
     end
-    if not mejorPP then return false end
-    hrp.CFrame = CFrame.new(mejorPart.Position + Vector3.new(0, 3, 3))
-    task.wait(0.5)   -- necesario: servidor debe registrar posicion antes de fireproximityprompt
-    pcall(function() fireproximityprompt(mejorPP) end)
-    task.wait(1.5)   -- necesario: servidor procesa la venta y actualiza NumFish
-    local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if hrp2 then hrp2.CFrame = posOriginal end
-    task.wait(0.3)
-    return true
+    -- fallback: fireproximityprompt si no encuentra el evento
+    local pp, _ = getSellPP()
+    if pp then
+        pcall(function() fireproximityprompt(pp) end)
+        return true
+    end
+    return false
 end
 
 local function getNearestSpot()
